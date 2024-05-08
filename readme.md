@@ -41,12 +41,26 @@ bash run_document_qwen.sh
 bash run_document_qwen_largepig.sh
 ```
 
+
+
+# Requirements
+
+**Important**
+```bash
+pip install -e transformers 
+```
+
+Others see [requirements.txt](requirements.txt)
+
+
+
 # The quickstart of LargePiG
 
 
 
 ```python
-import ...
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained(
     "Qwen/Qwen1.5-7B-Chat",
@@ -92,19 +106,6 @@ generated_ids = [
 response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
 print(response)
 ```
-
-
-# Requirements
-
-**Important**
-```bash
-pip install -e transformers 
-```
-
-Others see [requirements.txt](requirements.txt)
-
-
-
 
 
 # Reference Repositories
