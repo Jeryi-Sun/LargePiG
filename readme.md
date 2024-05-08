@@ -95,7 +95,7 @@ print(response)
 
 
 # Requirements
-See requirements.txt
+See [requirements.txt](requirements.txt)
 
 
 # Reference Repositories
