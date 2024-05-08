@@ -95,7 +95,16 @@ print(response)
 
 
 # Requirements
-See [requirements.txt](requirements.txt)
+
+**Important**
+```bash
+pip install -e transformers 
+```
+
+Others see [requirements.txt](requirements.txt)
+
+
+
 
 
 # Reference Repositories
