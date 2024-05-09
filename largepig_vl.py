@@ -65,7 +65,7 @@ class largepig:
         
         return model, processor
     
-    def generate(self, input_text, max_new_tokens=256, top_p=0.95, top_k=0, temperature=0.8, mature_layer=None, premature_layer=None, candidate_premature_layers=[], mode='baseline', verbose=True, remove_stop_words=False, relative_top=0.1, pointer=False, **kwargs):
+    def generate(self, input_text, max_new_tokens=256, top_p=0.95, top_k=0, temperature=0.8, mature_layer=None, anchor_layer=None, candidate_layers=[], mode='baseline', verbose=True, remove_stop_words=False, relative_top=0.1, pointer=False, **kwargs):
         with torch.no_grad():
 
             input_ids = self.processor(input_text, return_tensors="pt").input_ids.to(self.device)
@@ -77,20 +77,20 @@ class largepig:
                                     top_p=top_p, top_k=top_k, temperature=temperature, stopping_criteria=self.stopping_criteria, **kwargs)
             elif mode == 'largepig' and not pointer:
                 assert mature_layer is not None, "mature_layer must be specified"
-                assert candidate_premature_layers is not None, "candidate_premature_layers must be specified"
+                assert candidate_layers is not None, "candidate_layers must be specified"
                 outputs = self.model.generate(input_ids, max_length=max_len, num_return_sequences=1,
                                         output_scores=True, return_dict_in_generate=True, largepig_decoding=True,
                                         top_p=top_p, top_k=top_k, temperature=temperature, stopping_criteria=self.stopping_criteria, relative_top=relative_top, 
-                                        mature_layer=mature_layer, premature_layer=None, candidate_premature_layers=candidate_premature_layers, **kwargs,)
-                premature_layer_dist = outputs.premature_layer_dist
+                                        mature_layer=mature_layer, anchor_layer=None, candidate_layers=candidate_layers, **kwargs,)
+                anchor_layer_dist = outputs.anchor_layer_dist
             elif mode == 'largepig' and pointer:
                 assert mature_layer is not None, "mature_layer must be specified"
-                assert candidate_premature_layers is not None, "candidate_premature_layers must be specified"
+                assert candidate_layers is not None, "candidate_layers must be specified"
                 outputs = self.model.generate(input_ids, max_length=max_len, num_return_sequences=1,
                                         output_scores=True, return_dict_in_generate=True, largepig_decoding=True,
                                         top_p=top_p, top_k=top_k, temperature=temperature, stopping_criteria=self.stopping_criteria, relative_top=relative_top, 
-                                        mature_layer=mature_layer, premature_layer=None, candidate_premature_layers=candidate_premature_layers, **kwargs,)
-                premature_layer_dist = outputs.premature_layer_dist
+                                        mature_layer=mature_layer, anchor_layer=None, candidate_layers=candidate_layers, **kwargs,)
+                anchor_layer_dist = outputs.anchor_layer_dist
 
             sequences, scores = outputs.sequences, outputs.scores
 
@@ -113,7 +113,7 @@ class largepig:
         if self.device:
             torch.cuda.empty_cache()
 
-        return output_str, (premature_layer_dist if mode == 'largepig' else None)
+        return output_str, (anchor_layer_dist if mode == 'largepig' else None)
     
     def entropy(self, p):
         return torch.sum(-torch.where(p > 0, p * p.log2(), p.new([0.0])), dim=-1)
@@ -177,7 +177,7 @@ class largepig:
         probs_thresh = probs_thresh.unsqueeze(-1)
         return scores < probs_thresh
 
-    def lm_score(self, figure, input_text1, input_text2, pmi=False, max_new_tokens=256, top_p=0.95, top_k=0, temperature=0.8, mature_layer=None, premature_layer=None, candidate_premature_layers=[], mode='baseline', verbose=True, remove_stop_words=False, relative_top=0.1, relative_top_value=-1000.0, post_softmax=True, pointer=False, only_pointer=False, start_p=None, end_p=None, ref_prompt=None, scale_value=100, normalization=False, hallucination_detect=False, use_entropy=False, alpha=0.5, debug_get_emb=False, **kwargs):
+    def lm_score(self, figure, input_text1, input_text2, pmi=False, max_new_tokens=256, top_p=0.95, top_k=0, temperature=0.8, mature_layer=None, anchor_layer=None, candidate_layers=[], mode='baseline', verbose=True, remove_stop_words=False, relative_top=0.1, relative_top_value=-1000.0, post_softmax=True, pointer=False, only_pointer=False, start_p=None, end_p=None, ref_prompt=None, scale_value=100, normalization=False, hallucination_detect=False, use_entropy=False, alpha=0.5, debug_get_emb=False, **kwargs):
         with torch.no_grad():
             image = Image.open(figure)
             input_text = input_text1 + input_text2
@@ -207,11 +207,11 @@ class largepig:
                     return_dict=True,
                     output_attentions=False,
                     output_hidden_states=False,
-                    early_exit_layers=[premature_layer, mature_layer],
+                    early_exit_layers=[anchor_layer, mature_layer],
                 )
 
-                assert premature_layer is not None
-                base_logits = dict_outputs[premature_layer][0, prefix_ids.shape[-1] - 1: -1, :]
+                assert anchor_layer is not None
+                base_logits = dict_outputs[anchor_layer][0, prefix_ids.shape[-1] - 1: -1, :]
                 final_logits = dict_outputs[mature_layer][0, prefix_ids.shape[-1] - 1: -1, :]
                 final_logits = final_logits.log_softmax(dim=-1)
                 base_logits = base_logits.log_softmax(dim=-1)
@@ -225,49 +225,49 @@ class largepig:
                 log_probs = diff_logits[range(diff_logits.shape[0]), continue_ids].sum().item()
 
             elif mode == 'largepig' and not pointer:
-                premature_layer_dist = {l:0 for l in candidate_premature_layers}
+                anchor_layer_dist = {l:0 for l in candidate_layers}
                 picked_logits = []
                 result_dict = {}
-                premature_layers = []
+                anchor_layers = []
 
                 dict_outputs, outputs = self.model(
                     **inputs,
                     return_dict=True,
                     output_attentions=False,
                     output_hidden_states=False,
-                    early_exit_layers=candidate_premature_layers + [mature_layer],
+                    early_exit_layers=candidate_layers + [mature_layer],
                 )
 
                 for seq_i in range(prefix_ids.shape[-1] - 1, inputs.input_ids.shape[-1] - 1):
                     # Pick the less like layer to contrast with
-                    # 1. Stacking all premature_layers into a new dimension
-                    stacked_premature_layers = torch.stack([dict_outputs[i][:, seq_i, :] for i in candidate_premature_layers], dim=0)
+                    # 1. Stacking all anchor_layers into a new dimension
+                    stacked_anchor_layers = torch.stack([dict_outputs[i][:, seq_i, :] for i in candidate_layers], dim=0)
 
-                    # 2. Calculate the softmax values for mature_layer and all premature_layers
+                    # 2. Calculate the softmax values for mature_layer and all anchor_layers
                     softmax_mature_layer = F.softmax(dict_outputs[mature_layer][:, seq_i, :], dim=-1)  # shape: (batch_size, num_features)
-                    softmax_premature_layers = F.softmax(stacked_premature_layers, dim=-1)  # shape: (num_premature_layers, batch_size, num_features)
+                    softmax_anchor_layers = F.softmax(stacked_anchor_layers, dim=-1)  # shape: (num_anchor_layers, batch_size, num_features)
 
                     # 3. Calculate M, the average distribution
-                    M = 0.5 * (softmax_mature_layer[None, :, :] + softmax_premature_layers)  # shape: (num_premature_layers, batch_size, num_features)
+                    M = 0.5 * (softmax_mature_layer[None, :, :] + softmax_anchor_layers)  # shape: (num_anchor_layers, batch_size, num_features)
 
                     # 4. Calculate log-softmax for the KL divergence
                     log_softmax_mature_layer = F.log_softmax(dict_outputs[mature_layer][:, seq_i, :], dim=-1)  # shape: (batch_size, num_features)
-                    log_softmax_premature_layers = F.log_softmax(stacked_premature_layers, dim=-1)  # shape: (num_premature_layers, batch_size, num_features)
+                    log_softmax_anchor_layers = F.log_softmax(stacked_anchor_layers, dim=-1)  # shape: (num_anchor_layers, batch_size, num_features)
 
                     # 5. Calculate the KL divergences and then the JS divergences
-                    kl1 = F.kl_div(log_softmax_mature_layer[None, :, :], M, reduction='none').mean(-1)  # shape: (num_premature_layers, batch_size)
-                    kl2 = F.kl_div(log_softmax_premature_layers, M, reduction='none').mean(-1)  # shape: (num_premature_layers, batch_size)
-                    js_divs = 0.5 * (kl1 + kl2)  # shape: (num_premature_layers, batch_size)
+                    kl1 = F.kl_div(log_softmax_mature_layer[None, :, :], M, reduction='none').mean(-1)  # shape: (num_anchor_layers, batch_size)
+                    kl2 = F.kl_div(log_softmax_anchor_layers, M, reduction='none').mean(-1)  # shape: (num_anchor_layers, batch_size)
+                    js_divs = 0.5 * (kl1 + kl2)  # shape: (num_anchor_layers, batch_size)
 
                     # 6. Reduce the batchmean
-                    js_divs = js_divs.mean(-1)  # shape: (num_premature_layers,)
-                    premature_layer = candidate_premature_layers[int(js_divs.argmax().cpu().item())]
-                    premature_layer_dist[premature_layer] += 1
+                    js_divs = js_divs.mean(-1)  # shape: (num_anchor_layers,)
+                    anchor_layer = candidate_layers[int(js_divs.argmax().cpu().item())]
+                    anchor_layer_dist[anchor_layer] += 1
 
-                    premature_layers.append(premature_layer)
+                    anchor_layers.append(anchor_layer)
 
                 base_logits = torch.zeros_like(dict_outputs[mature_layer][0, prefix_ids.shape[-1] - 1:-1])
-                for i, l in enumerate(premature_layers):
+                for i, l in enumerate(anchor_layers):
                    base_logits[i] = dict_outputs[l][0, prefix_ids.shape[-1] - 1 + i]
                 final_logits = dict_outputs[mature_layer][0, prefix_ids.shape[-1] - 1:-1]
                 final_logits = final_logits.log_softmax(dim=-1)
@@ -284,10 +284,10 @@ class largepig:
                 log_probs = diff_logits[range(diff_logits.shape[0]), continue_ids].sum().item()
 
             elif mode == 'largepig' and pointer:
-                premature_layer_dist = {l:0 for l in candidate_premature_layers}
+                anchor_layer_dist = {l:0 for l in candidate_layers}
                 picked_logits = []
                 result_dict = {}
-                premature_layers = []
+                anchor_layers = []
                 p_cp_list = []
                 pointer_distr_list = []
 
@@ -296,7 +296,7 @@ class largepig:
                     return_dict=True,
                     output_attentions=True,
                     output_hidden_states=False,
-                    early_exit_layers=candidate_premature_layers + [mature_layer],
+                    early_exit_layers=candidate_layers + [mature_layer],
                 )
 
                 # 先加工一下 input_ids， 将其中的 img token 替换为 text token id
@@ -433,37 +433,37 @@ class largepig:
                     pointer_distr_list.append(pointer_vocab_distr.squeeze())
 
                     # Pick the less like layer to contrast with
-                    # 1. Stacking all premature_layers into a new dimension
-                    stacked_premature_layers = torch.stack([dict_outputs[i][:, seq_i, :] for i in candidate_premature_layers], dim=0)
+                    # 1. Stacking all anchor_layers into a new dimension
+                    stacked_anchor_layers = torch.stack([dict_outputs[i][:, seq_i, :] for i in candidate_layers], dim=0)
 
-                    # 2. Calculate the softmax values for mature_layer and all premature_layers
+                    # 2. Calculate the softmax values for mature_layer and all anchor_layers
                     softmax_mature_layer = F.softmax(dict_outputs[mature_layer][:, seq_i, :], dim=-1)  # shape: (batch_size, num_features)
-                    softmax_premature_layers = F.softmax(stacked_premature_layers, dim=-1)  # shape: (num_premature_layers, batch_size, num_features)
+                    softmax_anchor_layers = F.softmax(stacked_anchor_layers, dim=-1)  # shape: (num_anchor_layers, batch_size, num_features)
 
                     # 3. Calculate M, the average distribution
-                    M = 0.5 * (softmax_mature_layer[None, :, :] + softmax_premature_layers)  # shape: (num_premature_layers, batch_size, num_features)
+                    M = 0.5 * (softmax_mature_layer[None, :, :] + softmax_anchor_layers)  # shape: (num_anchor_layers, batch_size, num_features)
 
                     # 4. Calculate log-softmax for the KL divergence
                     log_softmax_mature_layer = F.log_softmax(dict_outputs[mature_layer][:, seq_i, :], dim=-1)  # shape: (batch_size, num_features)
-                    log_softmax_premature_layers = F.log_softmax(stacked_premature_layers, dim=-1)  # shape: (num_premature_layers, batch_size, num_features)
+                    log_softmax_anchor_layers = F.log_softmax(stacked_anchor_layers, dim=-1)  # shape: (num_anchor_layers, batch_size, num_features)
 
                     # 5. Calculate the KL divergences and then the JS divergences
-                    kl1 = F.kl_div(log_softmax_mature_layer[None, :, :], M, reduction='none').mean(-1)  # shape: (num_premature_layers, batch_size)
-                    kl2 = F.kl_div(log_softmax_premature_layers, M, reduction='none').mean(-1)  # shape: (num_premature_layers, batch_size)
-                    js_divs = 0.5 * (kl1 + kl2)  # shape: (num_premature_layers, batch_size)
+                    kl1 = F.kl_div(log_softmax_mature_layer[None, :, :], M, reduction='none').mean(-1)  # shape: (num_anchor_layers, batch_size)
+                    kl2 = F.kl_div(log_softmax_anchor_layers, M, reduction='none').mean(-1)  # shape: (num_anchor_layers, batch_size)
+                    js_divs = 0.5 * (kl1 + kl2)  # shape: (num_anchor_layers, batch_size)
                     p_cp_list.append(js_divs.max(0)[0].squeeze())
 
                     # 6. Reduce the batchmean
-                    js_divs = js_divs.mean(-1)  # shape: (num_premature_layers,)
-                    premature_layer = candidate_premature_layers[int(js_divs.argmax().cpu().item())]
-                    premature_layer_dist[premature_layer] += 1
+                    js_divs = js_divs.mean(-1)  # shape: (num_anchor_layers,)
+                    anchor_layer = candidate_layers[int(js_divs.argmax().cpu().item())]
+                    anchor_layer_dist[anchor_layer] += 1
 
-                    premature_layers.append(premature_layer)
+                    anchor_layers.append(anchor_layer)
 
 
 
                 base_logits = torch.zeros_like(dict_outputs[mature_layer][0, prefix_ids.shape[-1] - 1:-1])
-                for i, l in enumerate(premature_layers):
+                for i, l in enumerate(anchor_layers):
                    base_logits[i] = dict_outputs[l][0, prefix_ids.shape[-1] - 1 + i]
                 if only_pointer:
                     final_logits = dict_outputs[mature_layer][0, prefix_ids.shape[-1] - 1:-1]
@@ -492,4 +492,4 @@ class largepig:
                 
                 log_probs = diff_logits[range(diff_logits.shape[0]), continue_ids].sum().item()
 
-        return log_probs, (premature_layer_dist if mode == 'largepig' else None)
+        return log_probs, (anchor_layer_dist if mode == 'largepig' else None)

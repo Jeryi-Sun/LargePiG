@@ -232,21 +232,21 @@ if __name__ == "__main__":
         print("MODE: naive decoding from the last layer", flush=True)
         mode = "baseline"
         mature_layer = None
-        premature_layer = None
-        candidate_premature_layers = None
+        anchor_layer = None
+        candidate_layers = None
     elif len(early_exit_layers) == 2:
         print(f"MODE: largepig-static decoding with mature layer: {early_exit_layers[1]} and premature layer: {early_exit_layers[0]}")
         mode = "early_exit_contrastive"
         mature_layer = early_exit_layers[1]
-        premature_layer = early_exit_layers[0]
-        candidate_premature_layers = None
+        anchor_layer = early_exit_layers[0]
+        candidate_layers = None
     else:
         print(f"MODE: largepig decoding with mature layer: {early_exit_layers[-1]} and premature layers: {early_exit_layers[:-1]}")
         mode = "largepig"
         mature_layer = early_exit_layers[-1]
-        premature_layer = None
-        candidate_premature_layers = early_exit_layers[:-1]
-        premature_layer_dist = {l:0 for l in candidate_premature_layers}
+        anchor_layer = None
+        candidate_layers = early_exit_layers[:-1]
+        anchor_layer_dist = {l:0 for l in candidate_layers}
     answers = []
     result_step = []
     result_dict = {'total_mc1': 0.0, 'total_mc2': 0.0, 'total_mc3': 0.0, 'question': [], 'model_scores': []}
@@ -261,7 +261,7 @@ if __name__ == "__main__":
             scores_true = []
             scores_false = []
             generate_kwargs = dict(max_new_tokens=args.max_new_tokens, repetition_penalty=args.repetition_penalty, mode=mode, mature_layer=mature_layer, 
-                                   premature_layer=premature_layer, candidate_premature_layers=candidate_premature_layers, relative_top=args.relative_top, 
+                                   anchor_layer=anchor_layer, candidate_layers=candidate_layers, relative_top=args.relative_top, 
                                    relative_top_value=args.relative_top_value, post_softmax=True, pointer=args.pointer, only_pointer=args.only_pointer, 
                                    scale_value=args.scale_value, normalization=args.normalization, hallucination_detect=args.hallucination_detect, 
                                    use_entropy=args.use_entropy, alpha=args.alpha, attention_layers=args.attention_layers)
@@ -281,7 +281,7 @@ if __name__ == "__main__":
 
                 if mode == "largepig":
                     for k, v in c_dist.items():
-                        premature_layer_dist[k] += v
+                        anchor_layer_dist[k] += v
 
             for temp_ans in ref_false:
                 # append the current answer choice to the prompt
@@ -298,7 +298,7 @@ if __name__ == "__main__":
 
                 if mode == "largepig":
                     for k, v in c_dist.items():
-                        premature_layer_dist[k] += v
+                        anchor_layer_dist[k] += v
 
             scores = MC_calcs(scores_true, scores_false, ref_true, ref_best)
             # check nan in mc1/2/3
@@ -323,10 +323,10 @@ if __name__ == "__main__":
 
 
     if mode == "largepig" and args.debug:
-        total_tokens = sum(premature_layer_dist.values())
+        total_tokens = sum(anchor_layer_dist.values())
         if total_tokens > 0:
-            for l in candidate_premature_layers:
-                print('Premature layer {0} was used {1} times, {2}%'.format(l, premature_layer_dist[l], round(premature_layer_dist[l] / total_tokens * 100, 2)))
+            for l in candidate_layers:
+                print('Premature layer {0} was used {1} times, {2}%'.format(l, anchor_layer_dist[l], round(anchor_layer_dist[l] / total_tokens * 100, 2)))
 
 
     # Average the scores
