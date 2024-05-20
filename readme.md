@@ -79,7 +79,7 @@ text = tokenizer.apply_chat_template(
     add_generation_prompt=True
 )
 
-model_inputs = tokenizer([text], return_tensors="pt").to(device)
+model_inputs = tokenizer([text], return_tensors="pt").to("cuda")
 
 
 start_p = 10 # start of the copy content, for example 10
